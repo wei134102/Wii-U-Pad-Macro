@@ -8,6 +8,7 @@ from tkinter import ttk
 from typing import Callable
 
 import macro_script_py as ms
+from pc_i18n import PcI18n
 
 COLS = 10
 MARGIN = 14
@@ -23,24 +24,6 @@ _BTN_ROWS = [
     ["^", "v", "<", ">"],
     ["P", "M", "H"],
 ]
-
-_BTN_LABEL = {
-    "A": "A",
-    "B": "B",
-    "X": "X",
-    "Y": "Y",
-    "L": "L",
-    "R": "R",
-    "1": "ZL（脚本写 1）",
-    "2": "ZR（脚本写 2）",
-    "^": "十字 ↑",
-    "v": "十字 ↓",
-    "<": "十字 ←",
-    ">": "十字 →",
-    "P": "+（Plus）",
-    "M": "-（Minus）",
-    "H": "HOME",
-}
 
 
 def _axes_from_boxes(up: bool, dn: bool, lf: bool, rt: bool) -> tuple[float, float]:
@@ -67,15 +50,20 @@ class NodeGraphEditor(ttk.Frame):
         self,
         master: tk.Widget,
         on_change: Callable[[], None] | None = None,
+        i18n: PcI18n | None = None,
     ) -> None:
         super().__init__(master)
         self._on_change = on_change
+        self._i18n = i18n or PcI18n()
         self._steps: list[ms.Step] = []
         self._fallback_script: str | None = None
+        self._banner_key: str | None = None
         self._selected: int | None = None
         self._synced_sel_idx: int | None = -1
         self._force_resync_combo: bool = True
         self._follow_sensitive: list[ttk.Widget] = []
+        self._btn_checks: list[tuple[ttk.Checkbutton, str]] = []
+        self._fbtn_checks: list[tuple[ttk.Checkbutton, str]] = []
 
         # Footer must be packed before the expanding canvas, otherwise the canvas
         # steals all vertical space and buttons / edit panel disappear below the fold.
@@ -102,48 +90,55 @@ class NodeGraphEditor(ttk.Frame):
 
         bar = ttk.Frame(footer)
         bar.pack(fill=tk.X, pady=(0, 6))
-        ttk.Button(bar, text="删除节点", command=self._delete_selected).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(bar, text="后方插入", command=self._insert_after).pack(side=tk.LEFT)
-        ttk.Label(bar, text="（点画布节点选中；点虚线框 + 添加）").pack(side=tk.LEFT, padx=12)
+        self._btn_delete = ttk.Button(bar, text="", command=self._delete_selected)
+        self._btn_delete.pack(side=tk.LEFT, padx=(0, 8))
+        self._btn_insert = ttk.Button(bar, text="", command=self._insert_after)
+        self._btn_insert.pack(side=tk.LEFT)
+        self._lbl_canvas_hint = ttk.Label(bar, text="")
+        self._lbl_canvas_hint.pack(side=tk.LEFT, padx=12)
 
-        edit = ttk.LabelFrame(footer, text="选中节点编辑", padding=6)
-        edit.pack(fill=tk.BOTH, expand=True, pady=(0, 4))
+        self._edit_frame = ttk.LabelFrame(footer, text="", padding=6)
+        self._edit_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 4))
 
-        gh = ttk.Frame(edit)
+        gh = ttk.Frame(self._edit_frame)
         gh.pack(fill=tk.X)
-        ttk.Label(gh, text="此步前间隔 gap (ms):").pack(side=tk.LEFT)
+        self._lbl_gap = ttk.Label(gh, text="")
+        self._lbl_gap.pack(side=tk.LEFT)
         self._gap_var = tk.IntVar(value=0)
         ttk.Spinbox(gh, from_=0, to=60000, textvariable=self._gap_var, width=8, command=self._apply_panel).pack(
             side=tk.LEFT, padx=6
         )
-        ttk.Label(gh, text="按住 hold (ms):").pack(side=tk.LEFT, padx=(16, 0))
+        self._lbl_hold = ttk.Label(gh, text="")
+        self._lbl_hold.pack(side=tk.LEFT, padx=(16, 0))
         self._hold_var = tk.IntVar(value=80)
         ttk.Spinbox(gh, from_=1, to=5000, textvariable=self._hold_var, width=8, command=self._apply_panel).pack(
             side=tk.LEFT, padx=6
         )
 
-        combo_row = ttk.Frame(edit)
+        combo_row = ttk.Frame(self._edit_frame)
         combo_row.pack(fill=tk.X, pady=(6, 0))
         self._combo_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
+        self._chk_two_phase = ttk.Checkbutton(
             combo_row,
-            text="两段式：第一段按住不松，延迟后再追加第二段（无需手写 &）",
+            text="",
             variable=self._combo_var,
             command=self._on_two_phase_toggle,
-        ).pack(side=tk.LEFT)
+        )
+        self._chk_two_phase.pack(side=tk.LEFT)
 
-        phases = ttk.Frame(edit)
+        phases = ttk.Frame(self._edit_frame)
         phases.pack(fill=tk.BOTH, expand=True, pady=(6, 0))
         phases.columnconfigure(0, weight=1, uniform="ph")
         phases.columnconfigure(1, weight=1, uniform="ph")
         phases.rowconfigure(0, weight=1)
 
-        seg1 = ttk.LabelFrame(phases, text="第一段", padding=4)
-        seg1.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 4))
+        self._seg1 = ttk.LabelFrame(phases, text="", padding=4)
+        self._seg1.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 4))
 
-        keys = ttk.Frame(seg1)
+        keys = ttk.Frame(self._seg1)
         keys.pack(fill=tk.X)
-        ttk.Label(keys, text="常规按键:").pack(anchor=tk.W)
+        self._lbl_regular_buttons = ttk.Label(keys, text="")
+        self._lbl_regular_buttons.pack(anchor=tk.W)
         self._btn_vars: dict[str, tk.BooleanVar] = {}
         for row in _BTN_ROWS:
             rf = ttk.Frame(keys)
@@ -151,30 +146,32 @@ class NodeGraphEditor(ttk.Frame):
             for ch in row:
                 var = tk.BooleanVar(value=False)
                 self._btn_vars[ch] = var
-                ttk.Checkbutton(
+                w = ttk.Checkbutton(
                     rf,
-                    text=_BTN_LABEL.get(ch, ch),
+                    text=self._i18n.btn_label(ch),
                     variable=var,
                     command=self._apply_panel,
-                ).pack(side=tk.LEFT, padx=3, pady=1)
+                )
+                w.pack(side=tk.LEFT, padx=3, pady=1)
+                self._btn_checks.append((w, ch))
 
-        hint = ttk.Label(
+        self._hint_stick = ttk.Label(
             keys,
-            text="说明：脚本里 1=ZL，2=ZR；十字用 ^ v < >。",
+            text="",
             foreground="#444",
             wraplength=320,
         )
-        hint.pack(anchor=tk.W, pady=(4, 0))
+        self._hint_stick.pack(anchor=tk.W, pady=(4, 0))
 
-        sticks_wrap = ttk.Frame(seg1)
+        sticks_wrap = ttk.Frame(self._seg1)
         sticks_wrap.pack(fill=tk.X, pady=(6, 0))
         sticks_wrap.columnconfigure(0, weight=1, uniform="stk1")
         sticks_wrap.columnconfigure(1, weight=1, uniform="stk1")
 
-        lst_f = ttk.LabelFrame(sticks_wrap, text="左摇杆 → {w}{a}{s}{d}", padding=4)
-        lst_f.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 4))
+        self._lst_f = ttk.LabelFrame(sticks_wrap, text="", padding=4)
+        self._lst_f.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 4))
         self._lst_vars = {k: tk.BooleanVar(value=False) for k in ("up", "down", "left", "right")}
-        lf_row = ttk.Frame(lst_f)
+        lf_row = ttk.Frame(self._lst_f)
         lf_row.pack(fill=tk.X)
         ttk.Checkbutton(lf_row, text="↑", variable=self._lst_vars["up"], command=self._apply_panel).pack(
             side=tk.LEFT, padx=3
@@ -188,12 +185,13 @@ class NodeGraphEditor(ttk.Frame):
         ttk.Checkbutton(lf_row, text="→", variable=self._lst_vars["right"], command=self._apply_panel).pack(
             side=tk.LEFT, padx=3
         )
-        ttk.Button(lf_row, text="居中", command=self._clear_left_stick).pack(side=tk.LEFT, padx=6)
+        self._btn_center_l = ttk.Button(lf_row, text="", command=self._clear_left_stick)
+        self._btn_center_l.pack(side=tk.LEFT, padx=6)
 
-        rst_f = ttk.LabelFrame(sticks_wrap, text="右摇杆 → [r]…", padding=4)
-        rst_f.grid(row=0, column=1, sticky=tk.NSEW, padx=(4, 0))
+        self._rst_f = ttk.LabelFrame(sticks_wrap, text="", padding=4)
+        self._rst_f.grid(row=0, column=1, sticky=tk.NSEW, padx=(4, 0))
         self._rst_vars = {k: tk.BooleanVar(value=False) for k in ("up", "down", "left", "right")}
-        rf_row = ttk.Frame(rst_f)
+        rf_row = ttk.Frame(self._rst_f)
         rf_row.pack(fill=tk.X)
         ttk.Checkbutton(rf_row, text="↑", variable=self._rst_vars["up"], command=self._apply_panel).pack(
             side=tk.LEFT, padx=3
@@ -207,14 +205,16 @@ class NodeGraphEditor(ttk.Frame):
         ttk.Checkbutton(rf_row, text="→", variable=self._rst_vars["right"], command=self._apply_panel).pack(
             side=tk.LEFT, padx=3
         )
-        ttk.Button(rf_row, text="居中", command=self._clear_right_stick).pack(side=tk.LEFT, padx=6)
+        self._btn_center_r = ttk.Button(rf_row, text="", command=self._clear_right_stick)
+        self._btn_center_r.pack(side=tk.LEFT, padx=6)
 
-        self._two_phase_frame = ttk.LabelFrame(phases, text="第二段（追加输入）", padding=4)
+        self._two_phase_frame = ttk.LabelFrame(phases, text="", padding=4)
         self._two_phase_frame.grid(row=0, column=1, sticky=tk.NSEW, padx=(4, 0))
 
         fd_row = ttk.Frame(self._two_phase_frame)
         fd_row.pack(fill=tk.X)
-        ttk.Label(fd_row, text="延迟 (ms) 后再追加:").pack(side=tk.LEFT)
+        self._lbl_follow_delay = ttk.Label(fd_row, text="")
+        self._lbl_follow_delay.pack(side=tk.LEFT)
         self._follow_delay_var = tk.IntVar(value=100)
         sp_fd = ttk.Spinbox(
             fd_row,
@@ -234,7 +234,8 @@ class NodeGraphEditor(ttk.Frame):
 
         fkeys = ttk.Frame(fmid)
         fkeys.grid(row=0, column=0, columnspan=2, sticky=tk.EW)
-        ttk.Label(fkeys, text="第二段按键:").pack(anchor=tk.W)
+        self._lbl_seg2_buttons = ttk.Label(fkeys, text="")
+        self._lbl_seg2_buttons.pack(anchor=tk.W)
         self._fbtn_vars: dict[str, tk.BooleanVar] = {}
         for row in _BTN_ROWS:
             rf = ttk.Frame(fkeys)
@@ -244,11 +245,12 @@ class NodeGraphEditor(ttk.Frame):
                 self._fbtn_vars[ch] = var
                 w = ttk.Checkbutton(
                     rf,
-                    text=_BTN_LABEL.get(ch, ch),
+                    text=self._i18n.btn_label(ch),
                     variable=var,
                     command=self._apply_panel,
                 )
                 w.pack(side=tk.LEFT, padx=3, pady=1)
+                self._fbtn_checks.append((w, ch))
                 self._follow_sensitive.append(w)
 
         fst_wrap = ttk.Frame(fmid)
@@ -256,48 +258,45 @@ class NodeGraphEditor(ttk.Frame):
         fst_wrap.columnconfigure(0, weight=1, uniform="fst")
         fst_wrap.columnconfigure(1, weight=1, uniform="fst")
 
-        flst_f = ttk.LabelFrame(fst_wrap, text="第二段左摇杆", padding=4)
-        flst_f.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 4))
+        self._flst_f = ttk.LabelFrame(fst_wrap, text="", padding=4)
+        self._flst_f.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 4))
         self._flst_vars = {k: tk.BooleanVar(value=False) for k in ("up", "down", "left", "right")}
-        fl_row = ttk.Frame(flst_f)
+        fl_row = ttk.Frame(self._flst_f)
         fl_row.pack(fill=tk.X)
         for lab, k in (("↑", "up"), ("↓", "down"), ("←", "left"), ("→", "right")):
             w = ttk.Checkbutton(fl_row, text=lab, variable=self._flst_vars[k], command=self._apply_panel)
             w.pack(side=tk.LEFT, padx=3)
             self._follow_sensitive.append(w)
-        wb = ttk.Button(fl_row, text="居中", command=self._clear_follow_left_stick)
-        wb.pack(side=tk.LEFT, padx=6)
-        self._follow_sensitive.append(wb)
+        self._btn_center_fl = ttk.Button(fl_row, text="", command=self._clear_follow_left_stick)
+        self._btn_center_fl.pack(side=tk.LEFT, padx=6)
+        self._follow_sensitive.append(self._btn_center_fl)
 
-        frst_f = ttk.LabelFrame(fst_wrap, text="第二段右摇杆", padding=4)
-        frst_f.grid(row=0, column=1, sticky=tk.NSEW, padx=(4, 0))
+        self._frst_f = ttk.LabelFrame(fst_wrap, text="", padding=4)
+        self._frst_f.grid(row=0, column=1, sticky=tk.NSEW, padx=(4, 0))
         self._frst_vars = {k: tk.BooleanVar(value=False) for k in ("up", "down", "left", "right")}
-        fr_row = ttk.Frame(frst_f)
+        fr_row = ttk.Frame(self._frst_f)
         fr_row.pack(fill=tk.X)
         for lab, k in (("↑", "up"), ("↓", "down"), ("←", "left"), ("→", "right")):
             w = ttk.Checkbutton(fr_row, text=lab, variable=self._frst_vars[k], command=self._apply_panel)
             w.pack(side=tk.LEFT, padx=3)
             self._follow_sensitive.append(w)
-        wb2 = ttk.Button(fr_row, text="居中", command=self._clear_follow_right_stick)
-        wb2.pack(side=tk.LEFT, padx=6)
-        self._follow_sensitive.append(wb2)
+        self._btn_center_fr = ttk.Button(fr_row, text="", command=self._clear_follow_right_stick)
+        self._btn_center_fr.pack(side=tk.LEFT, padx=6)
+        self._follow_sensitive.append(self._btn_center_fr)
 
-        fw = ttk.LabelFrame(edit, text="固件说明", padding=4)
-        fw.pack(fill=tk.X, pady=(6, 0))
-        ttk.Label(
-            fw,
-            text=(
-                "当前插件脚本支持的实体键：A B X Y L R ZL(1) ZR(2) Plus(P) Minus(M) HOME(H)、十字 ↑↓←→(^ v < >)；"
-                "摇杆用模拟方向块编码。"
-                "不含：按下摇杆键(L3/R3)、TV、Sync — 若需要需在固件 macro_script 里再加映射。"
-            ),
+        self._fw = ttk.LabelFrame(self._edit_frame, text="", padding=4)
+        self._fw.pack(fill=tk.X, pady=(6, 0))
+        self._lbl_firmware_body = ttk.Label(
+            self._fw,
+            text="",
             foreground="#555",
             wraplength=520,
             justify=tk.LEFT,
-        ).pack(anchor=tk.W)
+        )
+        self._lbl_firmware_body.pack(anchor=tk.W)
 
         self._explain = tk.Label(
-            edit,
+            self._edit_frame,
             text="",
             fg="#c62828",
             bg="#f5f5f5",
@@ -313,18 +312,56 @@ class NodeGraphEditor(ttk.Frame):
         footer.pack(side=tk.BOTTOM, fill=tk.X)
         top.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
+        self._apply_i18n()
         self._redraw()
+
+    def set_i18n(self, i18n: PcI18n) -> None:
+        self._i18n = i18n
+        self._apply_i18n()
+
+    def _apply_i18n(self) -> None:
+        tr = self._i18n.t
+        self._btn_delete.configure(text=tr("node_delete"))
+        self._btn_insert.configure(text=tr("node_insert_after"))
+        self._lbl_canvas_hint.configure(text=tr("node_canvas_hint"))
+        self._edit_frame.configure(text=tr("sel_node_edit"))
+        self._lbl_gap.configure(text=tr("gap_ms"))
+        self._lbl_hold.configure(text=tr("hold_ms"))
+        self._chk_two_phase.configure(text=tr("two_phase_cb"))
+        self._seg1.configure(text=tr("seg1_title"))
+        self._lbl_regular_buttons.configure(text=tr("regular_buttons"))
+        for w, ch in self._btn_checks:
+            w.configure(text=self._i18n.btn_label(ch))
+        self._hint_stick.configure(text=tr("stick_script_hint"))
+        self._lst_f.configure(text=tr("left_stick_title"))
+        self._rst_f.configure(text=tr("right_stick_title"))
+        self._btn_center_l.configure(text=tr("center_stick"))
+        self._btn_center_r.configure(text=tr("center_stick"))
+        self._two_phase_frame.configure(text=tr("seg2_title"))
+        self._lbl_follow_delay.configure(text=tr("delay_then_append"))
+        self._lbl_seg2_buttons.configure(text=tr("seg2_buttons"))
+        self._flst_f.configure(text=tr("seg2_left"))
+        self._frst_f.configure(text=tr("seg2_right"))
+        self._btn_center_fl.configure(text=tr("center_stick"))
+        self._btn_center_fr.configure(text=tr("center_stick"))
+        for w, ch in self._fbtn_checks:
+            w.configure(text=self._i18n.btn_label(ch))
+        self._fw.configure(text=tr("firmware_note_title"))
+        self._lbl_firmware_body.configure(text=tr("firmware_note_body"))
+        if self._banner_key == "parse_error":
+            self._banner.configure(text=tr("parse_error_banner"))
+        elif self._banner_key == "two_phase":
+            self._banner.configure(text=tr("two_phase_need_second"))
+        self._refresh_key_explain()
 
     def _refresh_key_explain(self) -> None:
         if self._fallback_script is not None:
-            self._explain.config(
-                text="（当前槽位脚本未解析为节点，无按键说明；请修正下方原文后点「从原文载入」）"
-            )
+            self._explain.config(text=self._i18n.t("explain_fallback"))
             return
         if self._selected is None or self._selected >= len(self._steps):
             self._explain.config(text="")
             return
-        self._explain.config(text=ms.describe_step_zh(self._steps[self._selected]))
+        self._explain.config(text=ms.describe_step(self._steps[self._selected], self._i18n.locale))
 
     def _clear_left_stick(self) -> None:
         for v in self._lst_vars.values():
@@ -372,6 +409,7 @@ class NodeGraphEditor(ttk.Frame):
 
     def set_script(self, script: str) -> None:
         self._fallback_script = None
+        self._banner_key = None
         self._banner.config(text="")
         s = script.strip()
         if not s:
@@ -387,13 +425,14 @@ class NodeGraphEditor(ttk.Frame):
             self._steps = []
             self._selected = None
             self._force_resync_combo = True
-            self._banner.config(
-                text="脚本无法解析为节点图；请用下方「宏原文」改正后再「从原文载入」。保存时将保留原文。"
-            )
+            self._banner_key = "parse_error"
+            self._banner.config(text=self._i18n.t("parse_error_banner"))
         else:
             self._steps = parsed
             self._selected = 0 if self._steps else None
             self._force_resync_combo = True
+            self._banner_key = None
+            self._banner.config(text="")
         self._redraw()
         self._sync_panel()
 
@@ -623,6 +662,7 @@ class NodeGraphEditor(ttk.Frame):
         st.right_x, st.right_y = rx, ry
 
         self._banner.config(text="")
+        self._banner_key = None
         if not self._combo_var.get():
             self._clear_follow_fields(st)
         else:
@@ -655,9 +695,8 @@ class NodeGraphEditor(ttk.Frame):
             else:
                 if ms.step_has_follow_phase(st):
                     self._clear_follow_fields(st)
-                self._banner.config(
-                    text="两段式已勾选：请至少选择第二段的一个按键或摇杆方向；仅改延迟不会生效。"
-                )
+                self._banner_key = "two_phase"
+                self._banner.config(text=self._i18n.t("two_phase_need_second"))
 
         self._emit()
         self._redraw()

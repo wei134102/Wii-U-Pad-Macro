@@ -1,0 +1,2 @@
+# Optional: build Windows .exe (see build_exe.bat and readme_en.md)
+pyinstaller>=6.0

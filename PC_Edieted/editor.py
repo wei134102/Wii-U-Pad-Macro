@@ -3,6 +3,7 @@
 PC editor for Wii-U-Pad-Macro SD folder (macros.ini + macro1.txt .. macro8.txt).
 
 Default folder: <repo>/sd/wiiu/gamepad_macro (same layout as on SD: sd:/wiiu/gamepad_macro).
+When built with PyInstaller, defaults to <exe_dir>/sd/wiiu/gamepad_macro.
 """
 
 from __future__ import annotations
@@ -52,44 +53,55 @@ from tkinter import filedialog, messagebox, ttk
 
 from macro_bank_io import BankState, default_macro_root, load_bank, save_bank
 from node_editor import NodeGraphEditor
+from pc_i18n import PcI18n
 
-
-FORMAT_HELP = (
-    "节点图：每行 10 格顺序换行；蓝字(ms)=下一步间隔 gap；棕字(ms)=当前步按住 hold。\n"
-    "ZL / ZR 在脚本里分别写成单个字符 1 与 2（不是键盘的数字抽象符）。十字方向 ^ v < >；+- HOME → P M H。\n"
-    "左摇杆方向写入 {w}{a}{s}{d}；右摇杆先写 [r] 再接同上。\n"
-    "组合一步也可在节点图勾选「两段式」并填第二段，不必手写 &。\n"
-    "示例：A+120,50,B+120"
-)
+_UI_LANG_LABEL_TO_LOCALE = {"中文": "zh", "English": "en"}
 
 
 class MacroEditorApp(ttk.Frame):
-    def __init__(self, master: tk.Tk, macro_dir: Path) -> None:
+    def __init__(self, master: tk.Tk, macro_dir: Path, i18n: PcI18n | None = None) -> None:
         super().__init__(master, padding=8)
         self.pack(fill=tk.BOTH, expand=True)
         self.macro_dir = Path(macro_dir)
         self.state = BankState()
+        self._i18n = i18n or PcI18n()
+        self.master = master
 
         top = ttk.Frame(self)
         top.pack(fill=tk.X, pady=(0, 8))
 
-        ttk.Label(top, text="Macro folder:").pack(side=tk.LEFT)
+        lang_row = ttk.Frame(top)
+        lang_row.pack(fill=tk.X, pady=(0, 6))
+        self._lbl_ui_lang = ttk.Label(lang_row, text="")
+        self._lbl_ui_lang.pack(side=tk.LEFT)
+        self._ui_lang_var = tk.StringVar(
+            value="中文" if self._i18n.locale == "zh" else "English"
+        )
+        self._ui_lang_box = ttk.Combobox(
+            lang_row,
+            textvariable=self._ui_lang_var,
+            values=("中文", "English"),
+            state="readonly",
+            width=12,
+        )
+        self._ui_lang_box.pack(side=tk.LEFT, padx=8)
+        self._ui_lang_box.bind("<<ComboboxSelected>>", self._on_ui_lang)
+
+        self._lbl_macro_folder = ttk.Label(top, text="")
+        self._lbl_macro_folder.pack(side=tk.LEFT)
         self.dir_var = tk.StringVar(value=str(self.macro_dir))
-        ent = ttk.Entry(top, textvariable=self.dir_var, width=72)
+        ent = ttk.Entry(top, textvariable=self.dir_var, width=64)
         ent.pack(side=tk.LEFT, padx=6, fill=tk.X, expand=True)
-        ttk.Button(top, text="Browse…", command=self._browse_dir).pack(side=tk.LEFT)
+        self._btn_browse = ttk.Button(top, text="", command=self._browse_dir)
+        self._btn_browse.pack(side=tk.LEFT)
 
         self._plugin_opts_expanded = False
         self._opts_head = ttk.Frame(self)
         self._opts_head.pack(fill=tk.X, pady=(0, 4))
-        self._plugin_opts_toggle = ttk.Button(
-            self._opts_head,
-            text="▶ Plugin options（macros.ini）— 点击展开",
-            command=self._toggle_plugin_opts,
-        )
+        self._plugin_opts_toggle = ttk.Button(self._opts_head, text="", command=self._toggle_plugin_opts)
         self._plugin_opts_toggle.pack(side=tk.LEFT)
 
-        self.plugin_opts = ttk.LabelFrame(self, text="Plugin options (macros.ini header)", padding=6)
+        self.plugin_opts = ttk.LabelFrame(self, text="", padding=6)
 
         g = ttk.Frame(self.plugin_opts)
         g.pack(fill=tk.X)
@@ -98,29 +110,37 @@ class MacroEditorApp(ttk.Frame):
         self.to_run_var = tk.IntVar(value=1)
         self.plugin_on_var = tk.BooleanVar(value=True)
         self.lang_var = tk.IntVar(value=1)
+        self._spin_labels: list[tuple[ttk.Label, str]] = []
 
-        def spin(row: int, col: int, label: str, var: tk.Variable, frm: ttk.Frame = g) -> None:
+        def spin(row: int, col: int, msg_key: str, var: tk.Variable, frm: ttk.Frame = g) -> None:
             f = ttk.Frame(frm)
             f.grid(row=row, column=col, sticky=tk.W, padx=8, pady=4)
-            ttk.Label(f, text=label).pack(side=tk.LEFT)
+            lb = ttk.Label(f, text="")
+            lb.pack(side=tk.LEFT)
+            self._spin_labels.append((lb, msg_key))
             sp = ttk.Spinbox(f, textvariable=var, width=8)
             sp.pack(side=tk.LEFT, padx=4)
 
-        spin(0, 0, "post_menu_delay_ms", self.delay_var)
-        spin(0, 1, "macro_slot_count (1–8)", self.slot_count_var)
-        spin(1, 0, "macro_to_run (1–8)", self.to_run_var)
-        spin(1, 1, "language (0=EN 1=ZH)", self.lang_var)
+        spin(0, 0, "spin_post_menu_delay", self.delay_var)
+        spin(0, 1, "spin_macro_slot_count", self.slot_count_var)
+        spin(1, 0, "spin_macro_to_run", self.to_run_var)
+        spin(1, 1, "spin_language_plugin", self.lang_var)
         pf = ttk.Frame(g)
         pf.grid(row=0, column=2, rowspan=2, sticky=tk.W, padx=12)
-        ttk.Checkbutton(pf, text="plugin_enabled", variable=self.plugin_on_var).pack(anchor=tk.W)
+        self._chk_plugin = ttk.Checkbutton(pf, text="", variable=self.plugin_on_var)
+        self._chk_plugin.pack(anchor=tk.W)
 
         nb = ttk.Notebook(self)
         nb.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
+        self._notebook = nb
         self.slot_editors: list[NodeGraphEditor] = []
         self.slot_raws: list[tk.Text] = []
+        self._tab_raw_labels: list[ttk.Label] = []
+        self._tab_load_btns: list[ttk.Button] = []
+        self._tab_save_btns: list[ttk.Button] = []
         for i in range(8):
             tab = ttk.Frame(nb, padding=4)
-            nb.add(tab, text=f"macro{i + 1}")
+            nb.add(tab, text="")
 
             pw = ttk.Panedwindow(tab, orient=tk.VERTICAL)
             pw.pack(fill=tk.BOTH, expand=True)
@@ -130,23 +150,24 @@ class MacroEditorApp(ttk.Frame):
             pw.add(upper, weight=4)
             pw.add(lower, weight=1)
 
-            ge = NodeGraphEditor(upper, on_change=lambda idx=i: self._sync_raw_from_graph(idx))
+            ge = NodeGraphEditor(upper, on_change=lambda idx=i: self._sync_raw_from_graph(idx), i18n=self._i18n)
             ge.pack(fill=tk.BOTH, expand=True)
             self.slot_editors.append(ge)
 
             bf = ttk.Frame(lower)
             bf.pack(side=tk.BOTTOM, fill=tk.X, pady=(4, 0))
-            ttk.Button(bf, text="从原文载入节点图", command=lambda idx=i: self._apply_raw_to_graph(idx)).pack(
-                side=tk.LEFT
-            )
-            ttk.Button(bf, text="保存宏", command=self.save).pack(side=tk.LEFT, padx=(12, 0))
+            b_load = ttk.Button(bf, text="", command=lambda idx=i: self._apply_raw_to_graph(idx))
+            b_load.pack(side=tk.LEFT)
+            self._tab_load_btns.append(b_load)
+            b_save = ttk.Button(bf, text="", command=self.save)
+            b_save.pack(side=tk.LEFT, padx=(12, 0))
+            self._tab_save_btns.append(b_save)
 
             lf = ttk.Frame(lower)
             lf.pack(fill=tk.BOTH, expand=True, side=tk.TOP)
-            ttk.Label(
-                lf,
-                text="宏原文（可选）：修改后请点击「从原文载入节点图」。保存时以节点图为准；无法解析时保存原文。",
-            ).pack(anchor=tk.W)
+            rl = ttk.Label(lf, text="")
+            rl.pack(anchor=tk.W)
+            self._tab_raw_labels.append(rl)
             rf = ttk.Frame(lf)
             rf.pack(fill=tk.X, expand=False, pady=(2, 0))
             tx = tk.Text(rf, height=2, font=("Consolas", 10))
@@ -156,34 +177,64 @@ class MacroEditorApp(ttk.Frame):
             sb.pack(side=tk.RIGHT, fill=tk.Y)
             self.slot_raws.append(tx)
 
-        help_f = ttk.LabelFrame(self, text="格式说明", padding=6)
-        help_f.pack(fill=tk.X, pady=(0, 8))
-        ttk.Label(help_f, text=FORMAT_HELP, justify=tk.LEFT).pack(anchor=tk.W)
+        self._help_frame = ttk.LabelFrame(self, text="", padding=6)
+        self._help_frame.pack(fill=tk.X, pady=(0, 8))
+        self._help_label = ttk.Label(self._help_frame, text="", justify=tk.LEFT)
+        self._help_label.pack(anchor=tk.W)
 
         bot = ttk.Frame(self)
         bot.pack(fill=tk.X)
-        ttk.Button(bot, text="重新载入", command=self.reload).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(bot, text="保存宏", command=self.save).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Label(
-            bot,
-            text="（保存宏 = 写入 macros.ini + macro1.txt…macro8.txt 到上方文件夹）",
-            foreground="#555",
-        ).pack(side=tk.LEFT, padx=(4, 0))
+        self._btn_reload = ttk.Button(bot, text="", command=self.reload)
+        self._btn_reload.pack(side=tk.LEFT, padx=(0, 8))
+        self._btn_save = ttk.Button(bot, text="", command=self.save)
+        self._btn_save.pack(side=tk.LEFT, padx=(0, 8))
+        self._lbl_save_footer = ttk.Label(bot, text="", foreground="#555")
+        self._lbl_save_footer.pack(side=tk.LEFT, padx=(4, 0))
         self.status = tk.StringVar(value="")
         ttk.Label(bot, textvariable=self.status).pack(side=tk.LEFT, padx=16)
 
+        self._apply_ui_language()
         self.reload()
+
+    def _on_ui_lang(self, _ev: tk.Event | None = None) -> None:
+        loc = _UI_LANG_LABEL_TO_LOCALE.get(self._ui_lang_var.get().strip(), "zh")
+        self._i18n.set_locale(loc)
+        self._apply_ui_language()
+
+    def _apply_ui_language(self) -> None:
+        tr = self._i18n.t
+        self.master.title(tr("app_title"))
+        self._lbl_ui_lang.configure(text=tr("ui_language"))
+        self._lbl_macro_folder.configure(text=tr("macro_folder"))
+        self._btn_browse.configure(text=tr("browse"))
+        self._plugin_opts_toggle.configure(
+            text=tr("plugin_opts_collapse" if self._plugin_opts_expanded else "plugin_opts_expand")
+        )
+        self.plugin_opts.configure(text=tr("plugin_opts_frame"))
+        for lb, key in self._spin_labels:
+            lb.configure(text=tr(key))
+        self._chk_plugin.configure(text=tr("chk_plugin_enabled"))
+        for i in range(8):
+            self._notebook.tab(i, text=tr("tab_macro", n=i + 1))
+            self._tab_load_btns[i].configure(text=tr("btn_load_raw_to_graph"))
+            self._tab_save_btns[i].configure(text=tr("btn_save_macros"))
+            self._tab_raw_labels[i].configure(text=tr("raw_caption"))
+            self.slot_editors[i].set_i18n(self._i18n)
+        self._help_frame.configure(text=tr("format_help_title"))
+        self._help_label.configure(text=tr("format_help_body"))
+        self._btn_reload.configure(text=tr("btn_reload"))
+        self._btn_save.configure(text=tr("btn_save_macros"))
+        self._lbl_save_footer.configure(text=tr("save_footer_hint"))
 
     def _toggle_plugin_opts(self) -> None:
         self._plugin_opts_expanded = not self._plugin_opts_expanded
+        tr = self._i18n.t
         if self._plugin_opts_expanded:
-            # Must pack after the toggle row; otherwise pack() appends to the end and the
-            # panel appears below the notebook / status bar (looks "missing").
             self.plugin_opts.pack(fill=tk.X, pady=(0, 8), after=self._opts_head)
-            self._plugin_opts_toggle.configure(text="▼ Plugin options（macros.ini）— 点击折叠")
+            self._plugin_opts_toggle.configure(text=tr("plugin_opts_collapse"))
         else:
             self.plugin_opts.pack_forget()
-            self._plugin_opts_toggle.configure(text="▶ Plugin options（macros.ini）— 点击展开")
+            self._plugin_opts_toggle.configure(text=tr("plugin_opts_expand"))
 
     def _sync_raw_from_graph(self, idx: int) -> None:
         ge = self.slot_editors[idx]
@@ -243,34 +294,36 @@ class MacroEditorApp(ttk.Frame):
     def reload(self) -> None:
         path = Path(self.dir_var.get().strip())
         self.macro_dir = path
+        tr = self._i18n.t
         if not path.is_dir():
             try:
                 path.mkdir(parents=True, exist_ok=True)
             except OSError as e:
-                messagebox.showerror("Reload", f"Cannot create folder:\n{e}")
-                self.status.set("Reload failed")
+                messagebox.showerror(tr("dlg_reload"), tr("err_cannot_create_folder", e=e))
+                self.status.set(tr("status_reload_failed"))
                 return
         try:
             self.state = load_bank(path)
             self._state_to_gui(self.state)
             self.status.set(f"Loaded from {path}")
         except Exception as e:
-            messagebox.showerror("Reload", str(e))
-            self.status.set("Reload failed")
+            messagebox.showerror(tr("dlg_reload"), str(e))
+            self.status.set(tr("status_reload_failed"))
 
     def save(self) -> None:
         path = Path(self.dir_var.get().strip())
         self.macro_dir = path
+        tr = self._i18n.t
         try:
             path.mkdir(parents=True, exist_ok=True)
             st = self._gui_to_state()
             save_bank(path, st)
             self.state = st
             self.status.set(f"Saved to {path}")
-            messagebox.showinfo("Save", "macros.ini and macro1.txt .. macro8.txt written.")
+            messagebox.showinfo(tr("dlg_save"), tr("dlg_save_ok"))
         except Exception as e:
-            messagebox.showerror("Save", str(e))
-            self.status.set("Save failed")
+            messagebox.showerror(tr("dlg_save"), str(e))
+            self.status.set(tr("status_save_failed"))
 
 
 def main() -> int:
@@ -281,11 +334,19 @@ def main() -> int:
         default=str(default_macro_root()),
         help=f"Macro folder (default: {default_macro_root()})",
     )
+    ap.add_argument(
+        "--ui-lang",
+        choices=("zh", "en"),
+        default=None,
+        help="UI language (default: from pc_gui_locale.txt or Chinese).",
+    )
     args = ap.parse_args()
+    i18n = PcI18n()
+    if args.ui_lang:
+        i18n.set_locale(args.ui_lang)
     root = tk.Tk()
-    root.title("GamePad Macro — PC editor")
     root.geometry("1160x820")
-    MacroEditorApp(root, Path(args.folder))
+    MacroEditorApp(root, Path(args.folder), i18n=i18n)
     root.mainloop()
     return 0
 

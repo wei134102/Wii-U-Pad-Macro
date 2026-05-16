@@ -58,7 +58,10 @@
 
 ## PC 编辑器
 
-见 `PC_Edieted/`（Python + Tk），用于编辑 `sd/wiiu/gamepad_macro` 布局下的 `macros.ini` 与 `macro1.txt` … `macro8.txt`。
+见 `PC_Edieted/`（Python + Tk），用于编辑 `sd/wiiu/gamepad_macro` 下的 `macros.ini` 与 `macro1.txt` … `macro8.txt`。
+
+- **界面语言**：窗口顶部 **界面语言** 下拉框可切换 **中文 / English**；选择会写入同目录的 `pc_gui_locale.txt`（打包成 exe 后则写在 exe 同目录）。这与 `macros.ini` 里的 **`language`（主机插件界面语言）** 是两项独立设置。
+- **GitHub Actions**：推送 `main`/`master` 或 PR 会编译 **`.wps`** 与 **PC zip** 并上传 Artifact；推送 **`v*` 标签**（如 `v0.1.0`）时额外创建 **GitHub Release**，附带 `GamePad_Macro_Demo.wps` 与 `GamePadMacroEditor-windows.zip`。依赖上游仓库 [Wii-U-Time-Sync](https://github.com/Nightkingale/Wii-U-Time-Sync)（`master` + submodules），见 `.github/workflows/main.yml`。
 
 ---
 

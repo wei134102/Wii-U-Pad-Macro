@@ -3,12 +3,15 @@
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
 
 def default_macro_root() -> Path:
-    """Repo-relative: Wii-U-Pad-Macro/sd/wiiu/gamepad_macro"""
+    """Default macro folder: repo sd/... in dev; next to the .exe when frozen (PyInstaller)."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent / "sd" / "wiiu" / "gamepad_macro"
     return Path(__file__).resolve().parent.parent / "sd" / "wiiu" / "gamepad_macro"
 
 

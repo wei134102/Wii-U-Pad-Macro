@@ -7,3 +7,6 @@ __pycache__/
 *.pyc
 *.jpg
 Wii-U-Time-Sync/
+PC_Edieted/build/
+PC_Edieted/dist/
+PC_Edieted/*.spec

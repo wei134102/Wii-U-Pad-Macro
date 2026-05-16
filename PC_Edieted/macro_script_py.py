@@ -343,6 +343,121 @@ def _append_stick_zh(keys: str, x: float, y: float, is_right: bool) -> str:
     return keys + sep + side + "：" + dcn + "（脚本 " + frag + "）"
 
 
+def _mask_bit_en(bit: int) -> str | None:
+    m = {
+        VPAD_BUTTON_A: "A",
+        VPAD_BUTTON_B: "B",
+        VPAD_BUTTON_X: "X",
+        VPAD_BUTTON_Y: "Y",
+        VPAD_BUTTON_L: "L",
+        VPAD_BUTTON_R: "R",
+        VPAD_BUTTON_ZL: "ZL (script char 1)",
+        VPAD_BUTTON_ZR: "ZR (script char 2)",
+        VPAD_BUTTON_PLUS: "+ / Plus (script P)",
+        VPAD_BUTTON_MINUS: "− / Minus (script M)",
+        VPAD_BUTTON_HOME: "HOME (script H)",
+        VPAD_BUTTON_UP: "D-pad up (script ^)",
+        VPAD_BUTTON_DOWN: "D-pad down (script v)",
+        VPAD_BUTTON_LEFT: "D-pad left (script <)",
+        VPAD_BUTTON_RIGHT: "D-pad right (script >)",
+    }
+    return m.get(bit)
+
+
+def _append_stick_en(keys: str, x: float, y: float, is_right: bool) -> str:
+    up = y > 0.5
+    down = y < -0.5
+    left = x < -0.5
+    right = x > 0.5
+    if not (up or down or left or right):
+        return keys
+    sep = ", " if keys else ""
+    side = "right stick" if is_right else "left stick"
+    if up and left:
+        dcn = "up-left"
+    elif up and right:
+        dcn = "up-right"
+    elif down and left:
+        dcn = "down-left"
+    elif down and right:
+        dcn = "down-right"
+    elif up:
+        dcn = "up"
+    elif down:
+        dcn = "down"
+    elif left:
+        dcn = "left"
+    else:
+        dcn = "right"
+    frag = encode_stick(is_right, x, y)
+    return keys + sep + side + ": " + dcn + " (script " + frag + ")"
+
+
+def describe_step_en(st: Step) -> str:
+    """English legend for one step (PC editor)."""
+    bits: list[int] = []
+    m = st.mask
+    while m != 0 and len(bits) < 16:
+        low = m & -m
+        bits.append(low)
+        m ^= low
+    bits.sort(key=_mask_rank)
+
+    keys = ""
+    for b in bits:
+        z = _mask_bit_en(b)
+        if z:
+            keys += ", " if keys else ""
+            keys += z
+
+    keys = _append_stick_en(keys, st.left_x, st.left_y, False)
+    keys = _append_stick_en(keys, st.right_x, st.right_y, True)
+
+    if step_has_follow_phase(st):
+        keys += "; then (still holding phase 1) append"
+        fbits: list[int] = []
+        m = st.mask_follow
+        while m != 0 and len(fbits) < 16:
+            low = m & -m
+            fbits.append(low)
+            m ^= low
+        fbits.sort(key=_mask_rank)
+        for b in fbits:
+            z = _mask_bit_en(b)
+            if z:
+                keys += ", " + z
+        keys = _append_stick_en(keys, st.follow_left_x, st.follow_left_y, False)
+        keys = _append_stick_en(keys, st.follow_right_x, st.follow_right_y, True)
+
+    timing = f"Timing: gap before this step {st.pre_gap_ms} ms; "
+    if step_has_follow_phase(st):
+        timing += (
+            f"hold phase 1 only for {st.follow_delay_ms} ms (do not release); "
+            f"then hold the combined input for {st.hold_ms} ms"
+        )
+    else:
+        timing += f"hold for {st.hold_ms} ms"
+
+    head = "[This step] "
+    if not keys:
+        head += "(gap only, no buttons)" if st.pre_gap_ms > 0 else "(no buttons / sticks)"
+    else:
+        head += keys
+    head += ". " + timing
+
+    tok = encode_step(st.mask, st.left_x, st.left_y, st.right_x, st.right_y)
+    if step_has_follow_phase(st):
+        tok += f"&{st.follow_delay_ms}&{encode_step(st.mask_follow, st.follow_left_x, st.follow_left_y, st.follow_right_x, st.follow_right_y)}"
+    if tok:
+        head += f"; script fragment {tok}+{st.hold_ms}"
+    return head
+
+
+def describe_step(st: Step, lang: str) -> str:
+    """Localized step description for the PC editor."""
+    return describe_step_en(st) if lang == "en" else describe_step_zh(st)
+
+
 def describe_step_zh(st: Step) -> str:
     """Chinese legend for one step — keep in sync with macro_script::describe_step_zh (firmware)."""
     bits: list[int] = []
