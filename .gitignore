@@ -1,0 +1,9 @@
+build/
+*.elf
+*.wps
+*.map
+*.strip.elf
+__pycache__/
+*.pyc
+*.jpg
+Wii-U-Time-Sync/
