@@ -11,6 +11,10 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
+# Use Node 24–compatible action runtimes (see GitHub Actions Node 20 deprecation).
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -28,12 +32,12 @@ jobs:
         shell: bash
     steps:
       - name: Checkout Wii-U-Pad-Macro
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           path: Wii-U-Pad-Macro
 
       - name: Checkout Wii-U-Time-Sync (Makefile sibling)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: Nightkingale/Wii-U-Time-Sync
           ref: master
@@ -54,18 +58,19 @@ jobs:
         run: cp Wii-U-Pad-Macro/GamePad_Macro_Demo.wps ./GamePad_Macro_Demo.wps
 
       - name: Upload .wps artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: GamePad_Macro_Demo-wps
           path: GamePad_Macro_Demo.wps
 
   build-pc:
     name: PC editor (Windows .exe)
-    runs-on: windows-latest
+    # Pin image before windows-latest redirects to windows-2025-vs2026 (Jun 2026).
+    runs-on: windows-2025
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -93,7 +98,7 @@ jobs:
             -DestinationPath GamePadMacroEditor-windows.zip
 
       - name: Upload PC zip artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: GamePadMacroEditor-windows-zip
           path: GamePadMacroEditor-windows.zip
@@ -107,19 +112,19 @@ jobs:
       contents: write
     steps:
       - name: Download .wps
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: GamePad_Macro_Demo-wps
           path: release
 
       - name: Download PC zip
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: GamePadMacroEditor-windows-zip
           path: release
 
       - name: Publish release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
